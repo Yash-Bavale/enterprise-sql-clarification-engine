@@ -2,5 +2,5 @@ streamlit
 langgraph
 langchain-groq
 pydantic
-psycopg2-binary
+psycopg[binary]
 sqlalchemy
