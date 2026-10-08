@@ -1,3 +1,4 @@
+import uuid
 import streamlit as st
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
@@ -24,7 +25,8 @@ class State(TypedDict):
 
 # 3. Define Nodes
 def check_ambiguity(state: State):
-    prompt = f"Analyze this request for a sales DB: '{state['question']}'. Is it ambiguous? (e.g., 'best' could mean revenue or volume). If yes, ask a clarification question. If no, leave message blank."
+    question_text = state.get("question", "")
+    prompt = f"Analyze this request for a sales DB: '{question_text}'. Is it ambiguous? (e.g., 'best' could mean revenue or volume). If yes, ask a clarification question. If no, leave message blank."
     structured_llm = llm.with_structured_output(AmbiguityCheck)
     res = structured_llm.invoke(prompt)
     return {"is_ambiguous": res.is_ambiguous, "clarification_message": res.clarification_message}
@@ -33,7 +35,8 @@ def ask_human(state: State):
     pass
 
 def generate_sql(state: State):
-    prompt = f"Write Postgres SQL for: {state['question']}. Table schema: sales(id, client_name, revenue, units_sold, date). Return ONLY the raw SQL string without markdown formatting."
+    question_text = state.get("question", "")
+    prompt = f"Write Postgres SQL for: {question_text}. Table schema: sales(id, client_name, revenue, units_sold, date). Return ONLY the raw SQL string without markdown formatting."
     res = llm.invoke(prompt)
     content = res.content.strip()
     if content.startswith("```sql"):
@@ -44,11 +47,11 @@ def generate_sql(state: State):
 
 # 4. Routing Logic
 def router(state: State):
-    if state["is_ambiguous"]:
+    if state.get("is_ambiguous", False):
         return "ask_human"
     return "generate_sql"
 
-# 5. Build and Compile Graph (Cached to preserve memory across Streamlit reruns)
+# 5. Build and Compile Graph
 @st.cache_resource
 def get_graph():
     workflow = StateGraph(State)
@@ -66,24 +69,37 @@ def get_graph():
 
 app = get_graph()
 
-# 6. Streamlit UI & Execution Loop
-config = {"configurable": {"thread_id": "session_1"}}
+# 6. Session & Navigation Logic
+if "thread_id" not in st.session_state:
+    st.session_state["thread_id"] = str(uuid.uuid4())
+
+def reset_session():
+    st.session_state["thread_id"] = str(uuid.uuid4())
+
+with st.sidebar:
+    st.title("Navigation")
+    if st.button("🏠 Home / New Query", use_container_width=True):
+        reset_session()
+        st.rerun()
+
+config = {"configurable": {"thread_id": st.session_state["thread_id"]}}
 
 user_input = st.chat_input("Ask a question (e.g., 'Who is our best client?')")
 
 if user_input:
     app.invoke({"question": user_input, "is_ambiguous": False}, config)
 
-# Retrieve current graph state
+# Retrieve graph state safely
 state = app.get_state(config)
 
 if state and state.next == ('ask_human',):
     st.warning("⚠️ Ambiguity Detected in Your Request")
-    st.write(state.values.get("clarification_message"))
+    st.write(state.values.get("clarification_message", ""))
     
     clarification = st.text_input("Provide clarification:")
     if st.button("Submit Clarification"):
-        new_q = f"{state.values['question']} (Context: {clarification})"
+        current_q = state.values.get("question", "")
+        new_q = f"{current_q} (Context: {clarification})"
         app.update_state(config, {"question": new_q, "is_ambiguous": False})
         app.invoke(None, config)
         st.rerun()
@@ -102,3 +118,8 @@ elif state and state.values.get("sql_query"):
         
     except Exception as e:
         st.error(f"Database Error: {e}")
+
+    st.write("---")
+    if st.button("🔍 Ask Another Question"):
+        reset_session()
+        st.rerun()
