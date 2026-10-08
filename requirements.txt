@@ -3,4 +3,5 @@ langgraph
 langchain-groq
 pydantic
 psycopg[binary]
+psycopg2-binary
 sqlalchemy
